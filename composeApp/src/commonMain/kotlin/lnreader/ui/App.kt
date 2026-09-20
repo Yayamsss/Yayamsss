@@ -34,34 +34,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.application
 import kotlinx.coroutines.launch
 import lnreader.service.ChapterInfo
 import lnreader.service.LNReaderService
 import lnreader.service.NovelDetails
 import lnreader.service.NovelSummary
 
-/** Which pane is currently shown: the popular-novels list, a novel's metadata/chapters, or a chapter's content. */
 private sealed interface Screen {
     data object NovelList : Screen
     data class NovelDetail(val novel: NovelDetails) : Screen
     data class ChapterView(val novel: NovelDetails, val chapter: ChapterInfo, val content: String) : Screen
 }
 
-fun main() = application {
+@Composable
+fun LNReaderApp() {
     val service = remember { LNReaderService() }
-    DisposableEffect(Unit) { onDispose { service.close() } }
+    DisposableEffect(Unit) {
+        onDispose { service.close() }
+    }
 
-    Window(onCloseRequest = ::exitApplication, title = "LNReader Desktop") {
-        MaterialTheme {
-            LNReaderApp(service)
-        }
+    MaterialTheme {
+        LNReaderAppContent(service)
     }
 }
 
 @Composable
-private fun LNReaderApp(service: LNReaderService) {
+private fun LNReaderAppContent(service: LNReaderService) {
     val scope = rememberCoroutineScope()
 
     var pluginId by remember { mutableStateOf("allnovel") }
@@ -97,8 +95,7 @@ private fun LNReaderApp(service: LNReaderService) {
     }
 
     fun openChapter(novel: NovelDetails, chapter: ChapterInfo) = runTask {
-        val content = service.parseChapter(chapter.path)
-        screen = Screen.ChapterView(novel, chapter, content)
+        screen = Screen.ChapterView(novel, chapter, service.parseChapter(chapter.path))
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -111,7 +108,9 @@ private fun LNReaderApp(service: LNReaderService) {
                 modifier = Modifier.width(220.dp),
             )
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { loadPopular() }, enabled = !isLoading) { Text("Load popular novels") }
+            Button(onClick = { loadPopular() }, enabled = !isLoading) {
+                Text("Load popular novels")
+            }
             Spacer(Modifier.width(8.dp))
             pluginLabel?.let { Text(it, style = MaterialTheme.typography.caption) }
             if (isLoading) {
@@ -129,18 +128,18 @@ private fun LNReaderApp(service: LNReaderService) {
         Divider()
         Spacer(Modifier.height(12.dp))
 
-        when (val s = screen) {
+        when (val current = screen) {
             is Screen.NovelList -> NovelListPane(novels, onSelect = { openNovel(it.path) })
             is Screen.NovelDetail -> NovelDetailPane(
-                novel = s.novel,
+                novel = current.novel,
                 onBack = { screen = Screen.NovelList },
-                onOpenChapter = { chapter -> openChapter(s.novel, chapter) },
+                onOpenChapter = { openChapter(current.novel, it) },
             )
             is Screen.ChapterView -> ChapterPane(
-                novel = s.novel,
-                chapter = s.chapter,
-                content = s.content,
-                onBack = { screen = Screen.NovelDetail(s.novel) },
+                novel = current.novel,
+                chapter = current.chapter,
+                content = current.content,
+                onBack = { screen = Screen.NovelDetail(current.novel) },
             )
         }
     }
@@ -154,7 +153,10 @@ private fun NovelListPane(novels: List<NovelSummary>, onSelect: (NovelSummary) -
     }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         items(novels) { novel ->
-            Card(modifier = Modifier.fillMaxWidth().clickable { onSelect(novel) }, elevation = 1.dp) {
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable { onSelect(novel) },
+                elevation = 1.dp,
+            ) {
                 Text(novel.name, modifier = Modifier.padding(12.dp))
             }
         }
@@ -191,7 +193,10 @@ private fun NovelDetailPane(
             items(novel.chapters) { chapter ->
                 Text(
                     chapter.name,
-                    modifier = Modifier.fillMaxWidth().clickable { onOpenChapter(chapter) }.padding(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenChapter(chapter) }
+                        .padding(8.dp),
                 )
             }
         }
@@ -199,7 +204,12 @@ private fun NovelDetailPane(
 }
 
 @Composable
-private fun ChapterPane(novel: NovelDetails, chapter: ChapterInfo, content: String, onBack: () -> Unit) {
+private fun ChapterPane(
+    novel: NovelDetails,
+    chapter: ChapterInfo,
+    content: String,
+    onBack: () -> Unit,
+) {
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("< ${novel.name ?: "Back"}") }

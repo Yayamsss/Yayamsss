@@ -5,6 +5,7 @@ node_modules/
 # Gradle / Kotlin / Android build outputs and local machine config
 .gradle/
 build/
+.kotlin/
 local.properties
 .idea/
 *.iml
