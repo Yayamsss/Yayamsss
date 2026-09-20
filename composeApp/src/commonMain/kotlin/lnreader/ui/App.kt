@@ -29,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Update
@@ -37,12 +38,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -72,8 +72,10 @@ import coil3.compose.AsyncImage
 import kotlinx.datetime.Instant
 import lnreader.data.AppDatabase
 import lnreader.data.HistoryEntryRecord
+import lnreader.data.InstalledPluginRecord
 import lnreader.data.LibraryNovelRecord
 import lnreader.data.NovelUpdate
+import lnreader.data.RepositoryRecord
 import lnreader.service.LNReaderService
 import lnreader.service.NovelDetails
 import lnreader.service.NovelSummary
@@ -90,7 +92,7 @@ fun LNReaderApp() {
     }
 
     LaunchedEffect(Unit) {
-        appState.loadManifestSuggestions()
+        appState.refreshExtensions()
     }
 
     LNReaderTheme {
@@ -103,7 +105,13 @@ fun LNReaderApp() {
 private fun LNReaderAppContent(appState: LNReaderAppState) {
     val library by appState.libraryRepository.observeLibrary().collectAsState(initial = emptyList())
     val history by appState.historyRepository.observeHistory().collectAsState(initial = emptyList())
+    val repositories by appState.repositoryRepository.observeRepositories().collectAsState(initial = emptyList())
+    val installedPlugins by appState.installedPluginRepository.observeInstalledPlugins().collectAsState(initial = emptyList())
     val currentScreen = appState.currentScreen
+
+    LaunchedEffect(installedPlugins) {
+        appState.syncInstalledPlugins(installedPlugins)
+    }
 
     Scaffold(
         topBar = {
@@ -140,6 +148,7 @@ private fun LNReaderAppContent(appState: LNReaderAppState) {
                                     AppTab.Updates -> Icons.Filled.Update
                                     AppTab.History -> Icons.Filled.History
                                     AppTab.Browse -> Icons.Filled.Search
+                                    AppTab.Extensions -> Icons.Filled.Extension
                                 },
                                 contentDescription = tab.label,
                             )
@@ -177,14 +186,28 @@ private fun LNReaderAppContent(appState: LNReaderAppState) {
                     )
                     AppTab.History -> HistoryRoot(history = history, onOpenHistory = appState::openHistoryChapter)
                     AppTab.Browse -> BrowseRoot(
-                        pluginId = appState.pluginId,
-                        onPluginIdChange = { appState.pluginId = it },
-                        pluginLabel = appState.pluginLabel,
+                        selectedPluginId = appState.selectedPluginId,
+                        installedPlugins = installedPlugins,
                         novels = appState.browseNovels,
-                        manifestEntries = appState.manifestEntries,
                         isBusy = appState.isBusy,
+                        onSelectPlugin = appState::selectInstalledPlugin,
                         onLoadPopular = appState::loadPopularNovels,
                         onSelectNovel = appState::openBrowseNovel,
+                    )
+                    AppTab.Extensions -> ExtensionsRoot(
+                        repositories = repositories,
+                        catalogs = appState.repositoryCatalogs,
+                        installedPlugins = installedPlugins,
+                        repositoryInput = appState.repositoryInput,
+                        availablePlugins = appState.availablePlugins(),
+                        isBusy = appState.isBusy,
+                        onRepositoryInputChange = { appState.repositoryInput = it },
+                        onAddRepository = appState::addRepository,
+                        onRefreshAll = appState::refreshExtensions,
+                        onRefreshRepository = appState::refreshRepository,
+                        onRemoveRepository = appState::removeRepository,
+                        onInstallPlugin = appState::installPlugin,
+                        onUninstallPlugin = appState::uninstallPlugin,
                     )
                 }
                 is AppScreen.NovelDetail -> NovelDetailScreen(
@@ -227,59 +250,233 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
 
 @Composable
 private fun BrowseRoot(
-    pluginId: String,
-    onPluginIdChange: (String) -> Unit,
-    pluginLabel: String?,
+    selectedPluginId: String?,
+    installedPlugins: List<InstalledPluginRecord>,
     novels: List<NovelSummary>,
-    manifestEntries: List<lnreader.service.PluginManifestEntry>,
     isBusy: Boolean,
+    onSelectPlugin: (String) -> Unit,
     onLoadPopular: () -> Unit,
     onSelectNovel: (NovelSummary) -> Unit,
 ) {
+    if (installedPlugins.isEmpty()) {
+        EmptyState(
+            title = "No installed extensions",
+            message = "Open Extensions, add or refresh a repository, then install a plugin before browsing.",
+        )
+        return
+    }
+
+    val selectedPlugin = installedPlugins.firstOrNull { it.pluginId == selectedPluginId } ?: installedPlugins.first()
     Column(Modifier.fillMaxSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = pluginId,
-                onValueChange = onPluginIdChange,
-                label = { Text("Plugin id") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(12.dp))
-            Button(onClick = onLoadPopular, enabled = !isBusy && pluginId.isNotBlank()) {
-                Text("Load")
-            }
-        }
+        Text("Installed extensions", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
-        pluginLabel?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
-            Spacer(Modifier.height(8.dp))
-        }
-        val quickPicks = manifestEntries.filter {
-            pluginId.isBlank() || it.id.contains(pluginId, ignoreCase = true) || it.name.contains(pluginId, ignoreCase = true)
-        }.take(10)
-        if (quickPicks.isNotEmpty()) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(quickPicks.size) { index ->
-                    val entry = quickPicks[index]
-                    FilterChip(
-                        selected = entry.id == pluginId,
-                        onClick = { onPluginIdChange(entry.id) },
-                        label = { Text(entry.id) },
-                    )
-                }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(installedPlugins, key = { it.pluginId }) { plugin ->
+                FilterChip(
+                    selected = plugin.pluginId == selectedPlugin.pluginId,
+                    onClick = { onSelectPlugin(plugin.pluginId) },
+                    label = { Text(plugin.name) },
+                )
             }
-            Spacer(Modifier.height(12.dp))
         }
+        Spacer(Modifier.height(12.dp))
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(selectedPlugin.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${selectedPlugin.site} • ${selectedPlugin.lang.uppercase()} • v${selectedPlugin.version}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                Text(
+                    selectedPlugin.pluginId,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = onLoadPopular, enabled = !isBusy) {
+            Text("Load popular")
+        }
+        Spacer(Modifier.height(12.dp))
         HorizontalDivider()
         Spacer(Modifier.height(12.dp))
         if (novels.isEmpty()) {
             EmptyState(
-                title = "Browse sources",
-                message = "Pick a plugin id, load its popular feed, then open a novel to read or save it to your library.",
+                title = "Browse installed sources",
+                message = "Choose an installed extension, then load its popular feed to start reading.",
             )
         } else {
             NovelGrid(novels = novels, onSelectNovel = onSelectNovel)
+        }
+    }
+}
+
+@Composable
+private fun ExtensionsRoot(
+    repositories: List<RepositoryRecord>,
+    catalogs: List<RepositoryCatalogState>,
+    installedPlugins: List<InstalledPluginRecord>,
+    repositoryInput: String,
+    availablePlugins: List<AvailablePlugin>,
+    isBusy: Boolean,
+    onRepositoryInputChange: (String) -> Unit,
+    onAddRepository: () -> Unit,
+    onRefreshAll: () -> Unit,
+    onRefreshRepository: (String) -> Unit,
+    onRemoveRepository: (String) -> Unit,
+    onInstallPlugin: (RepositoryRecord, lnreader.service.PluginManifestEntry) -> Unit,
+    onUninstallPlugin: (String) -> Unit,
+) {
+    val installedById = installedPlugins.associateBy { it.pluginId }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 16.dp),
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Repositories", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = repositoryInput,
+                        onValueChange = onRepositoryInputChange,
+                        label = { Text("Manifest URL") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Button(onClick = onAddRepository, enabled = !isBusy && repositoryInput.isNotBlank()) {
+                        Text("Add")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRefreshAll, enabled = !isBusy && repositories.isNotEmpty()) {
+                        Text("Refresh all")
+                    }
+                    Text(
+                        "${repositories.size} repo${if (repositories.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.align(Alignment.CenterVertically),
+                    )
+                }
+            }
+        }
+        if (repositories.isEmpty()) {
+            item {
+                EmptyState(
+                    title = "No repositories added",
+                    message = "Add a manifest URL to load extensions.",
+                )
+            }
+        } else {
+            items(repositories, key = { it.url }) { repository ->
+                val catalog = catalogs.firstOrNull { it.repository.url == repository.url }
+                RepositoryCard(
+                    repository = repository,
+                    catalog = catalog,
+                    isBusy = isBusy,
+                    onRefresh = { onRefreshRepository(repository.url) },
+                    onRemove = { onRemoveRepository(repository.url) },
+                )
+            }
+        }
+        item {
+            Text("Available extensions", style = MaterialTheme.typography.titleMedium)
+        }
+        if (availablePlugins.isEmpty()) {
+            item {
+                EmptyState(
+                    title = "No extensions loaded yet",
+                    message = "Refresh a repository to fetch its plugin list. Repository errors are shown above per source.",
+                )
+            }
+        } else {
+            items(availablePlugins, key = { "${it.repository.url}:${it.entry.id}" }) { plugin ->
+                val installed = installedById[plugin.entry.id]
+                PluginRow(
+                    plugin = plugin,
+                    installed = installed != null,
+                    onInstall = { onInstallPlugin(plugin.repository, plugin.entry) },
+                    onUninstall = { onUninstallPlugin(plugin.entry.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RepositoryCard(
+    repository: RepositoryRecord,
+    catalog: RepositoryCatalogState?,
+    isBusy: Boolean,
+    onRefresh: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(repository.name ?: "Custom repository", style = MaterialTheme.typography.titleMedium)
+            Text(repository.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+            when {
+                catalog?.isLoading == true -> Text("Refreshing…", color = MaterialTheme.colorScheme.secondary)
+                !catalog?.errorMessage.isNullOrBlank() -> Text(
+                    catalog.errorMessage,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                catalog != null -> Text(
+                    "${catalog.plugins.size} plugins loaded",
+                    color = MaterialTheme.colorScheme.secondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onRefresh, enabled = !isBusy) { Text("Refresh") }
+                TextButton(onClick = onRemove, enabled = !isBusy) { Text("Remove") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginRow(
+    plugin: AvailablePlugin,
+    installed: Boolean,
+    onInstall: () -> Unit,
+    onUninstall: () -> Unit,
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CoverImage(
+                url = plugin.entry.iconUrl,
+                title = plugin.entry.name,
+                modifier = Modifier.width(64.dp).aspectRatio(1f),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(plugin.entry.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${plugin.entry.site} • ${plugin.entry.lang.uppercase()} • v${plugin.entry.version}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                Text(
+                    plugin.repository.name ?: plugin.repository.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Button(onClick = if (installed) onUninstall else onInstall) {
+                Text(if (installed) "Uninstall" else "Install")
+            }
         }
     }
 }

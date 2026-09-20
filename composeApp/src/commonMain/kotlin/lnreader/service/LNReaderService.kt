@@ -9,7 +9,7 @@ import lnreader.platform.PlatformJson
 import lnreader.runtime.JsRuntime
 
 const val DEFAULT_MANIFEST_URL =
-    "https://raw.githubusercontent.com/lnreader/lnreader-plugins/plugins/v3.0.0/.dist/plugins.min.json"
+    "https://raw.githubusercontent.com/LNReader/lnreader-plugins/plugins/v3.0.0/.dist/plugins.min.json"
 
 data class PluginManifestEntry(
     val id: String,
@@ -46,20 +46,28 @@ data class NovelDetails(
     val chapters: List<ChapterInfo>,
 )
 
-class LNReaderService(private val manifestUrl: String = DEFAULT_MANIFEST_URL) {
+class LNReaderService(private val defaultManifestUrl: String = DEFAULT_MANIFEST_URL) {
     private val jsThread = JsThread("lnreader-js")
     private var runtime: JsRuntime? = null
-    private var manifestCache: List<PluginManifestEntry>? = null
+    private val manifestCache = mutableMapOf<String, List<PluginManifestEntry>>()
     private var activePlugin: PluginManifestEntry? = null
 
-    suspend fun listPlugins(): List<PluginManifestEntry> = withContext(Dispatchers.Default) {
-        manifestCache ?: fetchManifest().also { manifestCache = it }
+    suspend fun listPlugins(manifestUrl: String = defaultManifestUrl): List<PluginManifestEntry> = withContext(Dispatchers.Default) {
+        manifestCache[manifestUrl] ?: fetchManifest(manifestUrl).also { manifestCache[manifestUrl] = it }
     }
 
-    suspend fun loadPlugin(pluginId: String): PluginManifestEntry = withContext(jsThread.dispatcher) {
-        val entries = manifestCache ?: fetchManifest().also { manifestCache = it }
-        val entry = entries.firstOrNull { it.id == pluginId }
-            ?: error("Plugin '$pluginId' not found in manifest (${entries.size} plugins available)")
+    suspend fun refreshPlugins(manifestUrl: String = defaultManifestUrl): List<PluginManifestEntry> = withContext(Dispatchers.Default) {
+        fetchManifest(manifestUrl).also { manifestCache[manifestUrl] = it }
+    }
+
+    suspend fun loadPlugin(pluginId: String, manifestUrl: String = defaultManifestUrl): PluginManifestEntry =
+        withContext(Dispatchers.Default) {
+            val entry = listPlugins(manifestUrl).firstOrNull { it.id == pluginId }
+                ?: error("Plugin '$pluginId' not found in manifest (${listPlugins(manifestUrl).size} plugins available)")
+            loadPlugin(entry)
+        }
+
+    suspend fun loadPlugin(entry: PluginManifestEntry): PluginManifestEntry = withContext(jsThread.dispatcher) {
         val pluginCode = PlatformIO.fetchText(entry.url)
         val jsRuntime = runtime ?: JsRuntime(jsThread.dispatcher).also {
             it.initialize()
@@ -89,7 +97,7 @@ class LNReaderService(private val manifestUrl: String = DEFAULT_MANIFEST_URL) {
 
     fun activePlugin(): PluginManifestEntry? = activePlugin
 
-    private suspend fun fetchManifest(): List<PluginManifestEntry> =
+    private suspend fun fetchManifest(manifestUrl: String): List<PluginManifestEntry> =
         PlatformJson.parseManifestEntries(PlatformIO.fetchText(manifestUrl))
 
     private fun requireRuntime(): JsRuntime =

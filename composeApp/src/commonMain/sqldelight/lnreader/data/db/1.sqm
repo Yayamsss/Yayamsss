@@ -1,0 +1,22 @@
+CREATE TABLE AppMeta (
+  key TEXT NOT NULL PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE Repository (
+  url TEXT NOT NULL PRIMARY KEY,
+  name TEXT,
+  addedAt INTEGER NOT NULL
+);
+
+CREATE TABLE InstalledPlugin (
+  pluginId TEXT NOT NULL PRIMARY KEY,
+  name TEXT NOT NULL,
+  site TEXT NOT NULL,
+  lang TEXT NOT NULL,
+  version TEXT NOT NULL,
+  url TEXT NOT NULL,
+  iconUrl TEXT,
+  repoUrl TEXT NOT NULL,
+  installedAt INTEGER NOT NULL
+);

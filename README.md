@@ -11,7 +11,8 @@ outside the original Android host, with:
 The desktop and Android apps use the same LNReader plugin bridge code and the
 same shared Compose UI. The app now follows a Tachiyomi/Aniyomi-inspired layout
 with bottom navigation, a dark Material 3 theme, cover grids, a local Library,
-read History, and a manual Updates checker.
+read History, a manual Updates checker, and an Extensions manager for plugin
+repositories plus installed sources.
 
 ## Module layout
 
@@ -25,6 +26,7 @@ composeApp/
     ui/         shared Material 3 UI + tab navigation
   src/commonMain/sqldelight/lnreader/data/db/
     LibraryHistory.sq
+    1.sqm
   src/jvmCommonMain/kotlin/lnreader/platform/
     Platform.jvmCommon.kt
   src/desktopMain/kotlin/lnreader/
@@ -47,7 +49,7 @@ androidApp/
 
 ## UI structure
 
-The shared app now has four bottom tabs:
+The shared app now has five bottom tabs:
 
 - **Library** — cover grid of locally saved novels backed by SQLDelight
 - **Updates** — manual `Check now` flow that re-fetches each library novel,
@@ -55,8 +57,10 @@ The shared app now has four bottom tabs:
   stored known count
 - **History** — reverse-chronological list of opened chapters; tapping an item
   reopens that chapter directly
-- **Browse** — plugin id picker + popular feed grid + novel details + chapter
-  reader
+- **Browse** — installed-plugin picker + popular feed grid + novel details +
+  chapter reader. Install a plugin from Extensions first.
+- **Extensions** — repository management plus a combined install/uninstall list
+  for all plugins fetched from the user's configured manifest URLs
 
 Novel details include a bookmark toggle that adds/removes the title from the
 local Library. Opening a chapter from Browse, Library, or History writes a
@@ -64,17 +68,25 @@ history row.
 
 ## Data layer
 
-The new persistence layer lives under `lnreader.data` and is shared by Android
-and desktop:
+The persistence layer lives under `lnreader.data` and is shared by Android and
+Desktop:
 
 - `AppDatabase` wires SQLDelight and exposes repositories
 - `DatabaseDriverFactory` provides platform-specific drivers
+- `RepositoryRepository` stores user-configured plugin manifest URLs and seeds
+  the default LNReader repository on first run only
+- `InstalledPluginRepository` stores installed-plugin metadata only; plugin JS
+  is still fetched fresh from the stored `url` whenever `LNReaderService`
+  loads that plugin
 - `LibraryRepository` manages saved novels and known chapter counts
 - `HistoryRepository` stores opened chapters in reverse chronological order
-- `UpdatesChecker` performs the manual updates scan using `LNReaderService`
+- `UpdatesChecker` performs the manual updates scan using installed plugin
+  metadata plus `LNReaderService`
 
 Schema tables:
 
+- `Repository(url, name, addedAt)`
+- `InstalledPlugin(pluginId, name, site, lang, version, url, iconUrl, repoUrl, installedAt)`
 - `LibraryNovel(pluginId, novelPath, name, cover, addedAt, knownChapterCount)`
 - `HistoryEntry(pluginId, novelPath, novelName, chapterPath, chapterName, readAt)`
 
@@ -130,10 +142,13 @@ QuickJS differences vs. the old GraalJS port:
 
 The smoke path exercises the real manifest/plugin flow and now also verifies:
 
+- repository seeding / persistence
+- installed-plugin persistence
 - SQLDelight database creation
 - Library insert/remove
 - History insert/upsert
 - manual Updates check execution
+- plugin fetch + `popularNovels()` + `parseNovel()` + `parseChapter()`
 
 ### CLI
 

@@ -8,8 +8,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import lnreader.data.HistoryEntryRecord
+import lnreader.data.InstalledPluginRecord
 import lnreader.data.LibraryNovelRecord
 import lnreader.data.NovelUpdate
+import lnreader.data.RepositoryRecord
+import lnreader.data.toManifestEntry
 import lnreader.service.ChapterInfo
 import lnreader.service.LNReaderService
 import lnreader.service.NovelDetails
@@ -21,6 +24,7 @@ internal enum class AppTab(val label: String) {
     Updates("Updates"),
     History("History"),
     Browse("Browse"),
+    Extensions("Extensions"),
 }
 
 internal sealed interface AppScreen {
@@ -47,6 +51,18 @@ internal sealed interface AppScreen {
     ) : AppScreen
 }
 
+internal data class RepositoryCatalogState(
+    val repository: RepositoryRecord,
+    val plugins: List<PluginManifestEntry> = emptyList(),
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null,
+)
+
+internal data class AvailablePlugin(
+    val repository: RepositoryRecord,
+    val entry: PluginManifestEntry,
+)
+
 @Stable
 internal class LNReaderAppState(
     private val service: LNReaderService,
@@ -55,10 +71,12 @@ internal class LNReaderAppState(
 ) {
     var backStack by mutableStateOf(listOf<AppScreen>(AppScreen.Root(AppTab.Browse)))
         private set
-    var pluginId by mutableStateOf("allnovel")
-    var pluginLabel by mutableStateOf<String?>(null)
+    var selectedPluginId by mutableStateOf<String?>(null)
+        private set
     var browseNovels by mutableStateOf<List<NovelSummary>>(emptyList())
-    var manifestEntries by mutableStateOf<List<PluginManifestEntry>>(emptyList())
+    var repositoryInput by mutableStateOf("")
+    var repositoryCatalogs by mutableStateOf<List<RepositoryCatalogState>>(emptyList())
+        private set
     var updates by mutableStateOf<List<NovelUpdate>>(emptyList())
     var lastUpdateCheckAt by mutableStateOf<Long?>(null)
     var isBusy by mutableStateOf(false)
@@ -68,14 +86,22 @@ internal class LNReaderAppState(
     val currentScreen: AppScreen get() = backStack.last()
     val currentTab: AppTab get() = currentScreen.tab
     val databasePath: String get() = appDatabase.path
+    val repositoryRepository get() = appDatabase.repositoryRepository
+    val installedPluginRepository get() = appDatabase.installedPluginRepository
     val libraryRepository get() = appDatabase.libraryRepository
     val historyRepository get() = appDatabase.historyRepository
     val updatesChecker get() = appDatabase.updatesChecker
 
-    fun loadManifestSuggestions() {
-        if (manifestEntries.isNotEmpty()) return
-        launchTask("Loading plugins") {
-            manifestEntries = service.listPlugins().sortedBy { it.name.lowercase() }
+    fun syncInstalledPlugins(installedPlugins: List<InstalledPluginRecord>) {
+        when {
+            installedPlugins.isEmpty() -> {
+                selectedPluginId = null
+                browseNovels = emptyList()
+            }
+            selectedPluginId == null || installedPlugins.none { it.pluginId == selectedPluginId } -> {
+                selectedPluginId = installedPlugins.first().pluginId
+                browseNovels = emptyList()
+            }
         }
     }
 
@@ -91,20 +117,69 @@ internal class LNReaderAppState(
         }
     }
 
+    fun selectInstalledPlugin(pluginId: String) {
+        if (selectedPluginId != pluginId) {
+            selectedPluginId = pluginId
+            browseNovels = emptyList()
+        }
+    }
+
+    fun refreshExtensions() = launchTask("Refreshing extensions") {
+        val repositories = repositoryRepository.snapshot()
+        refreshRepositoryCatalogs(repositories = repositories)
+    }
+
+    fun refreshRepository(url: String) = launchTask("Refreshing repository") {
+        val repositories = repositoryRepository.snapshot()
+        refreshRepositoryCatalogs(repositories = repositories, onlyUrl = url)
+    }
+
+    fun addRepository() = launchTask("Adding repository") {
+        val url = repositoryInput.trim()
+        require(url.isNotBlank()) { "Enter a repository URL." }
+        repositoryRepository.saveRepository(url)
+        repositoryInput = ""
+        refreshRepositoryCatalogs(repositoryRepository.snapshot(), onlyUrl = url)
+    }
+
+    fun removeRepository(url: String) = launchTask("Removing repository") {
+        repositoryRepository.removeRepository(url)
+        repositoryCatalogs = repositoryCatalogs.filterNot { it.repository.url == url }
+    }
+
+    fun installPlugin(repository: RepositoryRecord, entry: PluginManifestEntry) = launchTask("Installing extension") {
+        installedPluginRepository.install(entry, repository.url)
+        if (selectedPluginId == null) {
+            selectedPluginId = entry.id
+        }
+    }
+
+    fun uninstallPlugin(pluginId: String) = launchTask("Removing extension") {
+        installedPluginRepository.uninstall(pluginId)
+        if (selectedPluginId == pluginId) {
+            val remaining = installedPluginRepository.snapshot()
+            selectedPluginId = remaining.firstOrNull()?.pluginId
+            browseNovels = if (selectedPluginId == null) emptyList() else browseNovels
+        }
+    }
+
     fun loadPopularNovels() = launchTask("Loading popular novels") {
-        ensurePluginLoaded(pluginId)
-        pluginLabel = service.activePlugin()?.let { "${it.name} (${it.id})" }
+        val plugin = requireSelectedPlugin()
+        ensurePluginLoaded(plugin)
         browseNovels = service.popularNovels(1)
         backStack = listOf(AppScreen.Root(AppTab.Browse))
     }
 
-    fun openBrowseNovel(novel: NovelSummary) = openNovelDetail(
-        tab = AppTab.Browse,
-        pluginId = pluginId,
-        novelPath = novel.path,
-        fallbackTitle = novel.name,
-        fallbackCover = novel.cover,
-    )
+    fun openBrowseNovel(novel: NovelSummary) = launchTask("Loading novel") {
+        val pluginId = selectedPluginId ?: error("Install a plugin from Extensions first.")
+        openNovelDetail(
+            tab = AppTab.Browse,
+            pluginId = pluginId,
+            novelPath = novel.path,
+            fallbackTitle = novel.name,
+            fallbackCover = novel.cover,
+        )
+    }
 
     fun openLibraryNovel(novel: LibraryNovelRecord) = openNovelDetail(
         tab = AppTab.Library,
@@ -194,6 +269,49 @@ internal class LNReaderAppState(
         errorMessage = null
     }
 
+    fun availablePlugins(): List<AvailablePlugin> =
+        repositoryCatalogs.flatMap { catalog -> catalog.plugins.map { AvailablePlugin(catalog.repository, it) } }
+            .sortedWith(compareBy({ it.entry.name.lowercase() }, { it.entry.lang.lowercase() }, { it.repository.url.lowercase() }))
+
+    private suspend fun refreshRepositoryCatalogs(repositories: List<RepositoryRecord>, onlyUrl: String? = null) {
+        val current = repositoryCatalogs.associateBy { it.repository.url }
+        repositoryCatalogs = repositories.map { repository ->
+            val existing = current[repository.url]
+            if (onlyUrl == null || onlyUrl == repository.url) {
+                RepositoryCatalogState(
+                    repository = repository,
+                    plugins = existing?.plugins.orEmpty(),
+                    isLoading = true,
+                    errorMessage = null,
+                )
+            } else {
+                existing?.copy(repository = repository)
+                    ?: RepositoryCatalogState(repository = repository)
+            }
+        }
+        val targets = repositories.filter { onlyUrl == null || it.url == onlyUrl }
+        for (repository in targets) {
+            val state = runCatching {
+                RepositoryCatalogState(
+                    repository = repository,
+                    plugins = service.refreshPlugins(repository.url).sortedBy { it.name.lowercase() },
+                    isLoading = false,
+                    errorMessage = null,
+                )
+            }.getOrElse { error ->
+                RepositoryCatalogState(
+                    repository = repository,
+                    plugins = current[repository.url]?.plugins.orEmpty(),
+                    isLoading = false,
+                    errorMessage = error.message ?: error.toString(),
+                )
+            }
+            repositoryCatalogs = repositoryCatalogs.map {
+                if (it.repository.url == repository.url) state else it
+            }
+        }
+    }
+
     private fun openNovelDetail(
         tab: AppTab,
         pluginId: String,
@@ -213,10 +331,21 @@ internal class LNReaderAppState(
         )
     }
 
+    private suspend fun requireSelectedPlugin(): InstalledPluginRecord {
+        val pluginId = selectedPluginId ?: error("Install a plugin from Extensions first.")
+        return installedPluginRepository.find(pluginId)
+            ?: error("Selected plugin '$pluginId' is no longer installed.")
+    }
+
     private suspend fun ensurePluginLoaded(pluginId: String) {
-        if (service.activePlugin()?.id != pluginId) {
-            val entry = service.loadPlugin(pluginId)
-            pluginLabel = "${entry.name} (${entry.id})"
+        val plugin = installedPluginRepository.find(pluginId)
+            ?: error("Plugin '$pluginId' is not installed. Install it from Extensions first.")
+        ensurePluginLoaded(plugin)
+    }
+
+    private suspend fun ensurePluginLoaded(plugin: InstalledPluginRecord) {
+        if (service.activePlugin()?.id != plugin.pluginId || service.activePlugin()?.url != plugin.url) {
+            service.loadPlugin(plugin.toManifestEntry())
         }
     }
 

@@ -1,3 +1,26 @@
+CREATE TABLE AppMeta (
+  key TEXT NOT NULL PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE Repository (
+  url TEXT NOT NULL PRIMARY KEY,
+  name TEXT,
+  addedAt INTEGER NOT NULL
+);
+
+CREATE TABLE InstalledPlugin (
+  pluginId TEXT NOT NULL PRIMARY KEY,
+  name TEXT NOT NULL,
+  site TEXT NOT NULL,
+  lang TEXT NOT NULL,
+  version TEXT NOT NULL,
+  url TEXT NOT NULL,
+  iconUrl TEXT,
+  repoUrl TEXT NOT NULL,
+  installedAt INTEGER NOT NULL
+);
+
 CREATE TABLE LibraryNovel (
   pluginId TEXT NOT NULL,
   novelPath TEXT NOT NULL,
@@ -17,6 +40,61 @@ CREATE TABLE HistoryEntry (
   readAt INTEGER NOT NULL,
   PRIMARY KEY (pluginId, chapterPath)
 );
+
+selectAppMeta:
+SELECT value
+FROM AppMeta
+WHERE key = ?;
+
+upsertAppMeta:
+INSERT OR REPLACE INTO AppMeta(key, value)
+VALUES (?, ?);
+
+selectRepositories:
+SELECT *
+FROM Repository
+ORDER BY addedAt ASC;
+
+selectRepository:
+SELECT *
+FROM Repository
+WHERE url = ?;
+
+upsertRepository:
+INSERT OR REPLACE INTO Repository(url, name, addedAt)
+VALUES (?, ?, ?);
+
+deleteRepository:
+DELETE FROM Repository
+WHERE url = ?;
+
+selectInstalledPlugins:
+SELECT *
+FROM InstalledPlugin
+ORDER BY name COLLATE NOCASE ASC;
+
+selectInstalledPlugin:
+SELECT *
+FROM InstalledPlugin
+WHERE pluginId = ?;
+
+upsertInstalledPlugin:
+INSERT OR REPLACE INTO InstalledPlugin(
+  pluginId,
+  name,
+  site,
+  lang,
+  version,
+  url,
+  iconUrl,
+  repoUrl,
+  installedAt
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteInstalledPlugin:
+DELETE FROM InstalledPlugin
+WHERE pluginId = ?;
 
 selectLibraryNovels:
 SELECT *

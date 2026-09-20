@@ -11,12 +11,21 @@ suspend fun runCliFlow(args: Array<String>) {
     val novelPathArg = args.getOrNull(2)
     val chapterPathArg = args.getOrNull(3)
 
-    val service = LNReaderService(manifestUrl)
+    val service = LNReaderService()
     val appDatabase = AppDatabase()
     try {
+        appDatabase.repositoryRepository.saveRepository(manifestUrl)
+        val repositories = appDatabase.repositoryRepository.snapshot()
+        println("Repositories: ${repositories.map { it.url }}")
+
         println("Fetching manifest: $manifestUrl")
-        val entry = service.loadPlugin(pluginId)
-        println("Found plugin: ${entry.name} (${entry.id}) v${entry.version} -> ${entry.url}")
+        val entry = service.refreshPlugins(manifestUrl).firstOrNull { it.id == pluginId }
+            ?: error("Plugin '$pluginId' was not found in $manifestUrl")
+        appDatabase.installedPluginRepository.install(entry, manifestUrl)
+        println("Installed plugin: ${entry.name} (${entry.id}) v${entry.version} -> ${entry.url}")
+        println("Installed snapshot size: ${appDatabase.installedPluginRepository.snapshot().size}")
+
+        service.loadPlugin(entry)
         println("Loaded plugin instance: id=${entry.id} name=${entry.name}")
 
         val popular = service.popularNovels(1)
