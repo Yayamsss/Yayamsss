@@ -3,27 +3,36 @@
 Kotlin Multiplatform proof-of-concept for running LNReader JavaScript plugins
 outside the original Android host, with:
 
-- a shared `composeApp` module containing the Compose UI, service layer, and
-  QuickJS-based plugin runtime
+- a shared `composeApp` module containing the Compose UI, service layer,
+  SQLDelight persistence, and QuickJS-based plugin runtime
 - a thin `desktopApp` JVM launcher for Linux desktop
 - a thin `androidApp` launcher for Android
 
-The desktop and Android apps now use the same LNReader plugin bridge code. The
-previous GraalJS runtime has been replaced with
-[`io.github.dokar3:quickjs-kt`](https://github.com/dokar3/quickjs-kt), which
-works on both JVM and Android.
+The desktop and Android apps use the same LNReader plugin bridge code and the
+same shared Compose UI. The app now follows a Tachiyomi/Aniyomi-inspired layout
+with bottom navigation, a dark Material 3 theme, cover grids, a local Library,
+read History, and a manual Updates checker.
 
 ## Module layout
 
 ```text
 composeApp/
   src/commonMain/kotlin/lnreader/
+    data/       SQLDelight database, repositories, update checker
     platform/   expect declarations for IO / JSON / HTML / JS thread setup
     runtime/    shared QuickJS bootstrap + plugin loader
     service/    shared LNReaderService + models
-    ui/         shared Compose UI
+    ui/         shared Material 3 UI + tab navigation
+  src/commonMain/sqldelight/lnreader/data/db/
+    LibraryHistory.sq
   src/jvmCommonMain/kotlin/lnreader/platform/
-    Platform.jvmCommon.kt  actuals using OkHttp, Gson, Jsoup, JVM resources
+    Platform.jvmCommon.kt
+  src/desktopMain/kotlin/lnreader/
+    data/       desktop SQLDelight driver actual
+    platform/   desktop IO actual
+  src/androidMain/kotlin/lnreader/
+    data/       Android SQLDelight driver actual
+    platform/   Android IO actual
   src/commonMain/resources/
     cheerio-bundle.cjs
 
@@ -36,13 +45,54 @@ androidApp/
   src/main/AndroidManifest.xml
 ```
 
-## What changed from the old single-module build
+## UI structure
 
-- Root `src/main/kotlin` was removed.
-- Root `application` setup was moved into `desktopApp`.
-- Shared code moved into `composeApp`.
-- Android support was added through `androidApp`.
-- GraalJS was removed entirely; QuickJS now powers the shared runtime.
+The shared app now has four bottom tabs:
+
+- **Library** — cover grid of locally saved novels backed by SQLDelight
+- **Updates** — manual `Check now` flow that re-fetches each library novel,
+  compares chapter counts, lists titles with new chapters, then updates the
+  stored known count
+- **History** — reverse-chronological list of opened chapters; tapping an item
+  reopens that chapter directly
+- **Browse** — plugin id picker + popular feed grid + novel details + chapter
+  reader
+
+Novel details include a bookmark toggle that adds/removes the title from the
+local Library. Opening a chapter from Browse, Library, or History writes a
+history row.
+
+## Data layer
+
+The new persistence layer lives under `lnreader.data` and is shared by Android
+and desktop:
+
+- `AppDatabase` wires SQLDelight and exposes repositories
+- `DatabaseDriverFactory` provides platform-specific drivers
+- `LibraryRepository` manages saved novels and known chapter counts
+- `HistoryRepository` stores opened chapters in reverse chronological order
+- `UpdatesChecker` performs the manual updates scan using `LNReaderService`
+
+Schema tables:
+
+- `LibraryNovel(pluginId, novelPath, name, cover, addedAt, knownChapterCount)`
+- `HistoryEntry(pluginId, novelPath, novelName, chapterPath, chapterName, readAt)`
+
+Desktop stores the database at `~/.lnreader/lnreader.db`. Android uses the app's
+normal internal database directory.
+
+## Dependencies added
+
+- **Material 3** via `compose.material3`
+- **SQLDelight** (`app.cash.sqldelight`) with:
+  - `runtime`
+  - `coroutines-extensions`
+  - `android-driver`
+  - `sqlite-driver`
+- **Coil 3** for multiplatform cover loading:
+  - `io.coil-kt.coil3:coil-compose`
+  - `io.coil-kt.coil3:coil-network-okhttp`
+- **kotlinx-datetime** for history/update timestamps
 
 ## Runtime notes
 
@@ -72,14 +122,18 @@ QuickJS differences vs. the old GraalJS port:
 ./gradlew :desktopApp:run
 ```
 
-### Desktop smoke test through the same run task
+### Desktop smoke test
 
 ```bash
 ./gradlew :desktopApp:run --args="--smoke-test"
 ```
 
-This exercises: manifest fetch → plugin load → `popularNovels()` →
-`parseNovel()` → `parseChapter()`.
+The smoke path exercises the real manifest/plugin flow and now also verifies:
+
+- SQLDelight database creation
+- Library insert/remove
+- History insert/upsert
+- manual Updates check execution
 
 ### CLI
 
@@ -98,13 +152,13 @@ Optional third and fourth arguments override the novel path and chapter path:
 Build the debug APK:
 
 ```bash
-./gradlew :androidApp:assembleDebug
+ANDROID_HOME=$HOME/android-sdk ./gradlew :androidApp:assembleDebug
 ```
 
 Install it on a connected device:
 
 ```bash
-./gradlew :androidApp:installDebug
+ANDROID_HOME=$HOME/android-sdk ./gradlew :androidApp:installDebug
 ```
 
 ## Android SDK notes
@@ -117,12 +171,8 @@ Install it on a connected device:
 
 ## Validation
 
-Validated locally:
+Validated locally for this redesign with:
 
 - `:composeApp:compileKotlinDesktop`
 - `:desktopApp:run --args="--smoke-test"`
-- `:desktopApp:runCli`
 - `:androidApp:assembleDebug`
-
-The desktop smoke/CLI run succeeded end-to-end against the real LNReader plugin
-manifest and plugin `allnovel`.

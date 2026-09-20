@@ -1,0 +1,70 @@
+CREATE TABLE LibraryNovel (
+  pluginId TEXT NOT NULL,
+  novelPath TEXT NOT NULL,
+  name TEXT NOT NULL,
+  cover TEXT,
+  addedAt INTEGER NOT NULL,
+  knownChapterCount INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pluginId, novelPath)
+);
+
+CREATE TABLE HistoryEntry (
+  pluginId TEXT NOT NULL,
+  novelPath TEXT NOT NULL,
+  novelName TEXT NOT NULL,
+  chapterPath TEXT NOT NULL,
+  chapterName TEXT NOT NULL,
+  readAt INTEGER NOT NULL,
+  PRIMARY KEY (pluginId, chapterPath)
+);
+
+selectLibraryNovels:
+SELECT *
+FROM LibraryNovel
+ORDER BY addedAt DESC;
+
+selectLibraryNovel:
+SELECT *
+FROM LibraryNovel
+WHERE pluginId = ? AND novelPath = ?;
+
+upsertLibraryNovel:
+INSERT OR REPLACE INTO LibraryNovel(
+  pluginId,
+  novelPath,
+  name,
+  cover,
+  addedAt,
+  knownChapterCount
+)
+VALUES (?, ?, ?, ?, ?, ?);
+
+updateLibraryNovelMetadata:
+UPDATE LibraryNovel
+SET name = ?, cover = ?, knownChapterCount = ?
+WHERE pluginId = ? AND novelPath = ?;
+
+updateKnownChapterCount:
+UPDATE LibraryNovel
+SET knownChapterCount = ?
+WHERE pluginId = ? AND novelPath = ?;
+
+deleteLibraryNovel:
+DELETE FROM LibraryNovel
+WHERE pluginId = ? AND novelPath = ?;
+
+selectHistoryEntries:
+SELECT *
+FROM HistoryEntry
+ORDER BY readAt DESC;
+
+upsertHistoryEntry:
+INSERT OR REPLACE INTO HistoryEntry(
+  pluginId,
+  novelPath,
+  novelName,
+  chapterPath,
+  chapterName,
+  readAt
+)
+VALUES (?, ?, ?, ?, ?, ?);

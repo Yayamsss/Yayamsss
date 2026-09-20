@@ -1,6 +1,7 @@
 package lnreader.cli
 
 import kotlinx.coroutines.runBlocking
+import lnreader.data.AppDatabase
 import lnreader.service.DEFAULT_MANIFEST_URL
 import lnreader.service.LNReaderService
 
@@ -11,6 +12,7 @@ suspend fun runCliFlow(args: Array<String>) {
     val chapterPathArg = args.getOrNull(3)
 
     val service = LNReaderService(manifestUrl)
+    val appDatabase = AppDatabase()
     try {
         println("Fetching manifest: $manifestUrl")
         val entry = service.loadPlugin(pluginId)
@@ -27,14 +29,40 @@ suspend fun runCliFlow(args: Array<String>) {
             println("parseNovel($novelPath) result:")
             println(novel)
 
+            appDatabase.libraryRepository.saveNovel(
+                pluginId = entry.id,
+                novelPath = novelPath,
+                name = novel.name ?: popular.firstOrNull { it.path == novelPath }?.name ?: "(untitled)",
+                cover = novel.cover ?: popular.firstOrNull { it.path == novelPath }?.cover,
+                knownChapterCount = novel.chapters.size,
+            )
+            println("Library save ok -> ${appDatabase.path}")
+            println("Library snapshot size: ${appDatabase.libraryRepository.snapshot().size}")
+
             val chapterPath = chapterPathArg ?: novel.chapters.firstOrNull()?.path
+            val chapterName = novel.chapters.firstOrNull { it.path == chapterPath }?.name ?: chapterPathArg ?: "(unknown chapter)"
             if (chapterPath != null) {
                 val chapter = service.parseChapter(chapterPath)
                 println("parseChapter($chapterPath) result:")
                 println(chapter)
+
+                appDatabase.historyRepository.recordChapterOpen(
+                    pluginId = entry.id,
+                    novelPath = novelPath,
+                    novelName = novel.name ?: "(untitled)",
+                    chapterPath = chapterPath,
+                    chapterName = chapterName,
+                )
+                println("History snapshot size: ${appDatabase.historyRepository.snapshot().size}")
+
+                val updates = appDatabase.updatesChecker.checkNow(service)
+                println("Updates check result count: ${updates.size}")
             } else if (chapterPathArg != null) {
                 error("parseNovel() returned no chapter path; cannot call parseChapter().")
             }
+
+            appDatabase.libraryRepository.removeNovel(entry.id, novelPath)
+            println("Library cleanup size: ${appDatabase.libraryRepository.snapshot().size}")
         } else if (novelPathArg != null) {
             error("popularNovels() returned no novel path; cannot call parseNovel().")
         }

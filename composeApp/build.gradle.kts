@@ -5,6 +5,7 @@ plugins {
     id("com.android.library")
     id("org.jetbrains.compose")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("app.cash.sqldelight")
 }
 
 kotlin {
@@ -27,15 +28,26 @@ kotlin {
             dependencies {
                 implementation(compose.runtime)
                 implementation(compose.foundation)
-                implementation(compose.material)
+                implementation(compose.material3)
+                implementation(compose.materialIconsExtended)
+                implementation("app.cash.sqldelight:runtime:2.1.0")
+                implementation("app.cash.sqldelight:coroutines-extensions:2.1.0")
+                implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+                implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
                 implementation("io.github.dokar3:quickjs-kt:1.0.15")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
             }
         }
 
-        val androidMain by getting
+        val androidMain by getting {
+            dependencies {
+                implementation("app.cash.sqldelight:android-driver:2.1.0")
+            }
+        }
         val desktopMain by getting {
             dependencies {
+                implementation("app.cash.sqldelight:sqlite-driver:2.1.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
             }
         }
@@ -72,6 +84,14 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+sqldelight {
+    databases {
+        create("LNReaderDatabase") {
+            packageName.set("lnreader.data.db")
         }
     }
 }
