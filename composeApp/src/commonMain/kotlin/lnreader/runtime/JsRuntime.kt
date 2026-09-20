@@ -205,6 +205,65 @@ private val JS_BOOTSTRAP = """
                 };
             case '@libs/novelStatus':
                 return { NovelStatus: globalThis.__NovelStatus };
+            case '@libs/filterInputs':
+                return {
+                    FilterTypes: {
+                        TextInput: 'Text',
+                        Picker: 'Picker',
+                        CheckboxGroup: 'Checkbox',
+                        Switch: 'Switch',
+                        ExcludableCheckboxGroup: 'XCheckbox',
+                    },
+                };
+            case '@libs/defaultCover':
+                return { defaultCover: 'https://github.com/LNReader/lnreader-plugins/blob/main/icons/src/coverNotAvailable.jpg?raw=true' };
+            case '@libs/isAbsoluteUrl':
+                return {
+                    isUrlAbsolute: function(url) {
+                        if (!url) return false;
+                        if (url.indexOf('//') === 0) return true;
+                        if (url.indexOf('://') === -1) return false;
+                        if (url.indexOf('.') === -1) return false;
+                        if (url.indexOf('/') === -1) return false;
+                        if (url.indexOf(':') > url.indexOf('/')) return false;
+                        if (url.indexOf('://') < url.indexOf('.')) return true;
+                        return false;
+                    },
+                };
+            case '@libs/storage': {
+                function makeStorage() {
+                    const db = {};
+                    return {
+                        set: function(key, value, expires) {
+                            db[key] = {
+                                created: new Date(),
+                                value: value,
+                                expires: expires instanceof Date ? expires.getTime() : expires,
+                            };
+                        },
+                        get: function(key, raw) {
+                            const item = db[key];
+                            if (item && item.expires && Date.now() > item.expires) {
+                                delete db[key];
+                                return undefined;
+                            }
+                            return raw ? item : (item ? item.value : undefined);
+                        },
+                        getAllKeys: function() { return Object.keys(db); },
+                        delete: function(key) { delete db[key]; },
+                        clearAll: function() { for (const k of Object.keys(db)) delete db[k]; },
+                    };
+                }
+                function makeWebStorage() {
+                    const db = {};
+                    return { get: function() { return db; } };
+                }
+                return {
+                    storage: makeStorage(),
+                    localStorage: makeWebStorage(),
+                    sessionStorage: makeWebStorage(),
+                };
+            }
             default:
                 throw new Error('Unmocked module in runtime: ' + name);
         }
