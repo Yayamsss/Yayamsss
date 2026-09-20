@@ -13,6 +13,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.graalvm.polyglot.Context
 import org.graalvm.polyglot.Value
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import java.util.concurrent.Executors
 
 /**
@@ -120,12 +122,16 @@ class LNReaderService(private val manifestUrl: String = DEFAULT_MANIFEST_URL) : 
         toJsonElement(ctx, result).asJsonObject.toNovelDetails()
     }
 
-    /** Calls the active plugin's `parseChapter(path)` and returns the raw HTML/text content. */
+    /**
+     * Calls the active plugin's `parseChapter(path)` and returns the chapter content as
+     * plain, readable text: the plugin's raw result is HTML (e.g. `<p>` per paragraph), so
+     * it's parsed and converted to text with blank lines between paragraphs.
+     */
     suspend fun parseChapter(path: String): String = withContext(jsDispatcher) {
         val ctx = requireContext()
         val pl = requirePlugin()
         val result = awaitJsPromise(ctx, pl.invokeMember("parseChapter", path))
-        valueAsText(ctx, result)
+        htmlToReadableText(valueAsText(ctx, result))
     }
 
     private fun requireContext(): Context = context ?: error("Call loadPlugin() before using the service.")
@@ -141,6 +147,22 @@ class LNReaderService(private val manifestUrl: String = DEFAULT_MANIFEST_URL) : 
         context?.close()
         jsExecutor.shutdown()
     }
+}
+
+/**
+ * Converts a chapter's raw HTML (as returned by plugins' `parseChapter()`) into plain text,
+ * preserving paragraph breaks (`<p>`, `<br>`, block elements) as blank lines.
+ */
+private fun htmlToReadableText(html: String): String {
+    val document: Document = Jsoup.parse(html)
+    document.select("br").append("\n")
+    document.select("p, div").prepend("\n\n")
+    return document.wholeText()
+        .lineSequence()
+        .map { it.trim() }
+        .joinToString("\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
 }
 
 private fun JsonObject.stringOrNull(key: String): String? {
