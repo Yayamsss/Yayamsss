@@ -1,8 +1,9 @@
+package lnreader.runtime
+
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.graalvm.polyglot.Context
 import org.graalvm.polyglot.HostAccess
@@ -12,32 +13,10 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * Default manifest = the official LNReader plugin repo, pinned to v3.0.0
- * (the tag baked into master/package.json at the time this was written —
- * check https://github.com/lnreader/lnreader-plugins for the current one,
- * or point this at your own fork's .dist/plugins.min.json).
- */
-const val DEFAULT_MANIFEST_URL =
-    "https://raw.githubusercontent.com/lnreader/lnreader-plugins/plugins/v3.0.0/.dist/plugins.min.json"
-
-data class PluginManifestEntry(
-    val id: String,
-    val name: String,
-    val site: String,
-    val lang: String,
-    val version: String,
-    val url: String,
-    val iconUrl: String?,
-)
-
-val httpClient = OkHttpClient()
-val gson = Gson()
-
-/**
  * Exposed to JS as `__nativeBridge`. Every method here is what the JS-side
  * fetch()/console shims actually call into.
  */
-class NativeBridge {
+class NativeBridge(private val httpClient: OkHttpClient, private val gson: Gson) {
     @HostAccess.Export
     fun httpGet(url: String, initJson: String): String {
         val init = gson.fromJson(initJson, Map::class.java) as? Map<String, Any?> ?: emptyMap()
@@ -281,83 +260,71 @@ URL.prototype.toString = function() { return this.href; };
     };
 """.trimIndent()
 
-fun main(args: Array<String>) {
-    val manifestUrl = args.getOrNull(0) ?: DEFAULT_MANIFEST_URL
-    val pluginId = args.getOrNull(1) ?: "allnovel"
-
-    println("Fetching manifest: $manifestUrl")
-    val manifestJson = httpClient.newCall(Request.Builder().url(manifestUrl).build())
-        .execute().use { it.body?.string() ?: "[]" }
-    val entries = gson.fromJson(manifestJson, Array<PluginManifestEntry>::class.java).toList()
-    val entry = entries.firstOrNull { it.id == pluginId }
-        ?: error("Plugin '$pluginId' not found in manifest (${entries.size} plugins available)")
-
-    println("Found plugin: ${entry.name} (${entry.id}) v${entry.version} -> ${entry.url}")
-    val pluginCode = httpClient.newCall(Request.Builder().url(entry.url).build())
-        .execute().use { it.body?.string() ?: error("empty plugin body") }
-
-    val cheerioBundleSource = object {}.javaClass.getResourceAsStream("/cheerio-bundle.cjs")
-        ?.bufferedReader()?.readText()
-        ?: error("cheerio-bundle.cjs missing from resources")
-
-    Context.newBuilder("js")
-        .allowHostAccess(HostAccess.EXPLICIT)
-        .allowHostClassLookup { false }
-        .option("js.ecmascript-version", "2022")
-        .build().use { context ->
-            val bindings = context.getBindings("js")
-            bindings.putMember("__nativeBridge", NativeBridge())
-
-            context.eval("js", JS_BOOTSTRAP)
-
-            // Load the cheerio+htmlparser2 bundle once as a CJS module, expose it as __cheerioLib
-            val cheerioLib: Value = bindings.getMember("__cjsLoad").execute(cheerioBundleSource)
-            bindings.putMember("__cheerioLib", cheerioLib)
-
-            // Load the actual plugin
-            val plugin: Value = bindings.getMember("__loadPlugin").execute(pluginCode)
-            println("Loaded plugin instance: id=${plugin.getMember("id")} name=${plugin.getMember("name")}")
-
-            // Call popularNovels(1, { showLatestNovels: false, filters: {} }) and wait for the Promise.
-            val buildArg = context.eval(
-                "js",
-                "(function(f) { return { showLatestNovels: false, filters: f || {} }; })"
+fun awaitJsPromise(context: Context, promise: Value, timeoutMs: Long = 30_000): Value {
+    val future = CompletableFuture<Value>()
+    promise.invokeMember(
+        "then",
+        ProxyExecutable { args ->
+            future.complete(args.getOrNull(0))
+            null
+        },
+        ProxyExecutable { args ->
+            future.completeExceptionally(
+                RuntimeException(args.getOrNull(0)?.toString() ?: "unknown JS error")
             )
-            val defaultFilters = plugin.getMember("filters")
-            val popularArgs = buildArg.execute(defaultFilters)
-            val promise: Value = plugin.invokeMember("popularNovels", 1, popularArgs)
+            null
+        },
+    )
 
-            val future = CompletableFuture<Value>()
-            promise.invokeMember(
-                "then",
-                ProxyExecutable { args2 -> future.complete(args2.getOrNull(0)); null },
-                ProxyExecutable { args2 ->
-                    future.completeExceptionally(RuntimeException(args2.getOrNull(0)?.toString() ?: "unknown JS error"))
-                    null
-                },
-            )
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (!future.isDone && System.currentTimeMillis() < deadline) {
+        context.eval("js", "1")
+        Thread.sleep(10)
+    }
+    if (!future.isDone) {
+        throw IllegalStateException("Timed out waiting for JavaScript Promise to resolve.")
+    }
+    return future.get(1, TimeUnit.SECONDS)
+}
 
-            // GraalJS drains its microtask queue on re-entry; nudge it with tiny
-            // evals in case the host->guest call above didn't already flush it.
-            val deadline = System.currentTimeMillis() + 30_000
-            while (!future.isDone && System.currentTimeMillis() < deadline) {
-                context.eval("js", "1")
-                Thread.sleep(10)
-            }
+fun Value.memberString(name: String): String? =
+    if (hasMembers() && hasMember(name) && !getMember(name).isNull) getMember(name).asString() else null
 
-            if (!future.isDone) {
-                println("Timed out waiting for popularNovels() to resolve.")
-                return
-            }
+fun valueAsText(context: Context, value: Value): String =
+    context.eval("js", "(function(value) { return String(value); })").execute(value).asString()
 
-            try {
-                val result = future.get(1, TimeUnit.SECONDS)
-                println("popularNovels() result:")
-                println(result)
-            } catch (e: Exception) {
-                println("popularNovels() rejected or errored: ${e.cause?.message ?: e.message}")
-                println("(Expected here if this network can't reach ${entry.site} — the point of this POC")
-                println(" was validating that manifest -> plugin JS -> GraalJS -> cheerio all wire up correctly.)")
-            }
-        }
+/**
+ * Builds and wires a GraalJS [Context] the way compiled LNReader plugins
+ * expect: a `fetch()` backed by OkHttp, real `cheerio`/`htmlparser2` (via the
+ * pre-built esbuild bundle in resources), a `require()` shim, and a minimal
+ * `console`. One [Context] should be reused for the lifetime of a loaded
+ * plugin and only ever touched from a single thread.
+ */
+object JsRuntime {
+    private val httpClient = OkHttpClient()
+    private val gson = Gson()
+
+    fun createContext(): Context {
+        val context = Context.newBuilder("js")
+            .allowHostAccess(HostAccess.EXPLICIT)
+            .allowHostClassLookup { false }
+            .option("js.ecmascript-version", "2022")
+            .build()
+
+        val bindings = context.getBindings("js")
+        bindings.putMember("__nativeBridge", NativeBridge(httpClient, gson))
+        context.eval("js", JS_BOOTSTRAP)
+
+        // Load the cheerio+htmlparser2 bundle once as a CJS module, expose it as __cheerioLib
+        val cheerioBundleSource = javaClass.getResourceAsStream("/cheerio-bundle.cjs")
+            ?.bufferedReader()?.readText()
+            ?: error("cheerio-bundle.cjs missing from resources")
+        val cheerioLib: Value = bindings.getMember("__cjsLoad").execute(cheerioBundleSource)
+        bindings.putMember("__cheerioLib", cheerioLib)
+
+        return context
+    }
+
+    fun loadPlugin(context: Context, pluginCode: String): Value =
+        context.getBindings("js").getMember("__loadPlugin").execute(pluginCode)
 }
