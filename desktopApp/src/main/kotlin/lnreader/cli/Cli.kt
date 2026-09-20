@@ -10,6 +10,7 @@ suspend fun runCliFlow(args: Array<String>) {
     val pluginId = args.getOrNull(1) ?: "allnovel"
     val novelPathArg = args.getOrNull(2)
     val chapterPathArg = args.getOrNull(3)
+    val searchQueryArg = args.getOrNull(4)
 
     val service = LNReaderService()
     val appDatabase = AppDatabase()
@@ -27,6 +28,12 @@ suspend fun runCliFlow(args: Array<String>) {
 
         service.loadPlugin(entry)
         println("Loaded plugin instance: id=${entry.id} name=${entry.name}")
+
+        if (!searchQueryArg.isNullOrBlank()) {
+            val searchResults = service.searchNovels(searchQueryArg, 1)
+            println("searchNovels($searchQueryArg) result:")
+            println(searchResults)
+        }
 
         val popular = service.popularNovels(1)
         println("popularNovels() result:")

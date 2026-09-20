@@ -82,6 +82,10 @@ class LNReaderService(private val defaultManifestUrl: String = DEFAULT_MANIFEST_
         PlatformJson.parseNovelSummaries(requireRuntime().popularNovels(page))
     }
 
+    suspend fun searchNovels(searchTerm: String, page: Int = 1): List<NovelSummary> = withContext(jsThread.dispatcher) {
+        PlatformJson.parseNovelSummaries(requireRuntime().searchNovels(searchTerm, page))
+    }
+
     suspend fun parseNovel(path: String): NovelDetails = withContext(jsThread.dispatcher) {
         PlatformJson.parseNovelDetails(requireRuntime().parseNovel(path))
     }

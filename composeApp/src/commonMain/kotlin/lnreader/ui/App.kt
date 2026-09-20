@@ -187,10 +187,16 @@ private fun LNReaderAppContent(appState: LNReaderAppState) {
                     AppTab.History -> HistoryRoot(history = history, onOpenHistory = appState::openHistoryChapter)
                     AppTab.Browse -> BrowseRoot(
                         selectedPluginId = appState.selectedPluginId,
+                        selectedSearchPluginIds = appState.selectedSearchPluginIds,
                         installedPlugins = installedPlugins,
-                        novels = appState.browseNovels,
+                        browseQuery = appState.browseQuery,
+                        browseMode = appState.browseContentMode,
+                        novels = appState.browseItems,
                         isBusy = appState.isBusy,
                         onSelectPlugin = appState::selectInstalledPlugin,
+                        onToggleSearchPlugin = appState::toggleSearchPlugin,
+                        onBrowseQueryChange = { appState.browseQuery = it },
+                        onSearch = appState::searchInstalledSources,
                         onLoadPopular = appState::loadPopularNovels,
                         onSelectNovel = appState::openBrowseNovel,
                     )
@@ -251,12 +257,18 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun BrowseRoot(
     selectedPluginId: String?,
+    selectedSearchPluginIds: Set<String>,
     installedPlugins: List<InstalledPluginRecord>,
-    novels: List<NovelSummary>,
+    browseQuery: String,
+    browseMode: BrowseContentMode,
+    novels: List<BrowseNovelRecord>,
     isBusy: Boolean,
     onSelectPlugin: (String) -> Unit,
+    onToggleSearchPlugin: (String) -> Unit,
+    onBrowseQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
     onLoadPopular: () -> Unit,
-    onSelectNovel: (NovelSummary) -> Unit,
+    onSelectNovel: (BrowseNovelRecord) -> Unit,
 ) {
     if (installedPlugins.isEmpty()) {
         EmptyState(
@@ -268,13 +280,39 @@ private fun BrowseRoot(
 
     val selectedPlugin = installedPlugins.firstOrNull { it.pluginId == selectedPluginId } ?: installedPlugins.first()
     Column(Modifier.fillMaxSize()) {
-        Text("Installed extensions", style = MaterialTheme.typography.titleMedium)
+        Text("Popular source", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(installedPlugins, key = { it.pluginId }) { plugin ->
                 FilterChip(
                     selected = plugin.pluginId == selectedPlugin.pluginId,
                     onClick = { onSelectPlugin(plugin.pluginId) },
+                    label = { Text(plugin.name) },
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("Global search", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = browseQuery,
+            onValueChange = onBrowseQueryChange,
+            label = { Text("Title or keyword") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Search sources",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(installedPlugins, key = { "search-${it.pluginId}" }) { plugin ->
+                FilterChip(
+                    selected = plugin.pluginId in selectedSearchPluginIds,
+                    onClick = { onToggleSearchPlugin(plugin.pluginId) },
                     label = { Text(plugin.name) },
                 )
             }
@@ -296,19 +334,39 @@ private fun BrowseRoot(
             }
         }
         Spacer(Modifier.height(12.dp))
-        Button(onClick = onLoadPopular, enabled = !isBusy) {
-            Text("Load popular")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onSearch,
+                enabled = !isBusy && browseQuery.isNotBlank() && selectedSearchPluginIds.isNotEmpty(),
+            ) {
+                Text("Search")
+            }
+            Button(onClick = onLoadPopular, enabled = !isBusy) {
+                Text("Load popular")
+            }
         }
         Spacer(Modifier.height(12.dp))
         HorizontalDivider()
         Spacer(Modifier.height(12.dp))
         if (novels.isEmpty()) {
             EmptyState(
-                title = "Browse installed sources",
-                message = "Choose an installed extension, then load its popular feed to start reading.",
+                title = when (browseMode) {
+                    BrowseContentMode.Empty -> "Browse installed sources"
+                    BrowseContentMode.Popular -> "No popular novels found"
+                    BrowseContentMode.Search -> "No search results"
+                },
+                message = when (browseMode) {
+                    BrowseContentMode.Empty -> "Choose an installed extension, then load its popular feed or search across your installed sources."
+                    BrowseContentMode.Popular -> "This extension returned no popular novels."
+                    BrowseContentMode.Search -> "Try another search term or enable more installed sources."
+                },
             )
         } else {
-            NovelGrid(novels = novels, onSelectNovel = onSelectNovel)
+            BrowseNovelGrid(
+                novels = novels,
+                showSource = browseMode == BrowseContentMode.Search || novels.map { it.pluginId }.distinct().size > 1,
+                onSelectNovel = onSelectNovel,
+            )
         }
     }
 }
@@ -667,15 +725,20 @@ private fun ReaderScreen(screen: AppScreen.Reader) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NovelGrid(novels: List<NovelSummary>, onSelectNovel: (NovelSummary) -> Unit) {
+private fun BrowseNovelGrid(novels: List<BrowseNovelRecord>, showSource: Boolean, onSelectNovel: (BrowseNovelRecord) -> Unit) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 128.dp),
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(novels, key = { it.path }) { novel ->
-            NovelCard(title = novel.name, cover = novel.cover, onClick = { onSelectNovel(novel) })
+        items(novels, key = { "${it.pluginId}:${it.novel.path}" }) { novel ->
+            NovelCard(
+                title = novel.novel.name,
+                subtitle = novel.pluginName.takeIf { showSource },
+                cover = novel.novel.cover,
+                onClick = { onSelectNovel(novel) },
+            )
         }
     }
 }
@@ -690,13 +753,13 @@ private fun LibraryGrid(library: List<LibraryNovelRecord>, onOpenNovel: (Library
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(library, key = { "${it.pluginId}:${it.novelPath}" }) { novel ->
-            NovelCard(title = novel.name, cover = novel.cover, onClick = { onOpenNovel(novel) })
+            NovelCard(title = novel.name, subtitle = null, cover = novel.cover, onClick = { onOpenNovel(novel) })
         }
     }
 }
 
 @Composable
-private fun NovelCard(title: String, cover: String?, onClick: () -> Unit) {
+private fun NovelCard(title: String, subtitle: String?, cover: String?, onClick: () -> Unit) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
@@ -705,6 +768,15 @@ private fun NovelCard(title: String, cover: String?, onClick: () -> Unit) {
             CoverImage(url = cover, title = title, modifier = Modifier.fillMaxWidth().aspectRatio(0.7f))
             Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                subtitle?.let {
+                    Text(
+                        text = it,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
             }
         }
     }

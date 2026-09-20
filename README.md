@@ -57,8 +57,9 @@ The shared app now has five bottom tabs:
   stored known count
 - **History** — reverse-chronological list of opened chapters; tapping an item
   reopens that chapter directly
-- **Browse** — installed-plugin picker + popular feed grid + novel details +
-  chapter reader. Install a plugin from Extensions first.
+- **Browse** — installed-plugin picker + global search across installed sources
+  + per-source search chips + popular feed grid + novel details + chapter
+  reader. Install a plugin from Extensions first.
 - **Extensions** — repository management plus a combined install/uninstall list
   for all plugins fetched from the user's configured manifest URLs
 

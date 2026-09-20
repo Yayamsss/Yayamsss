@@ -323,6 +323,18 @@ class JsRuntime(dispatcher: CoroutineDispatcher) {
             """.trimIndent()
         )
 
+    suspend fun searchNovels(searchTerm: String, page: Int): String =
+        quickJs.evaluate(
+            """
+                JSON.stringify(
+                    await globalThis.__plugin.searchNovels(
+                        ${PlatformJson.quoteString(searchTerm)},
+                        $page
+                    ) ?? []
+                )
+            """.trimIndent()
+        )
+
     suspend fun parseNovel(path: String): String =
         quickJs.evaluate(
             """

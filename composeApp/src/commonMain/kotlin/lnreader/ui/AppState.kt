@@ -63,6 +63,18 @@ internal data class AvailablePlugin(
     val entry: PluginManifestEntry,
 )
 
+internal enum class BrowseContentMode {
+    Empty,
+    Popular,
+    Search,
+}
+
+internal data class BrowseNovelRecord(
+    val pluginId: String,
+    val pluginName: String,
+    val novel: NovelSummary,
+)
+
 @Stable
 internal class LNReaderAppState(
     private val service: LNReaderService,
@@ -73,7 +85,13 @@ internal class LNReaderAppState(
         private set
     var selectedPluginId by mutableStateOf<String?>(null)
         private set
-    var browseNovels by mutableStateOf<List<NovelSummary>>(emptyList())
+    var browseItems by mutableStateOf<List<BrowseNovelRecord>>(emptyList())
+        private set
+    var browseContentMode by mutableStateOf(BrowseContentMode.Empty)
+        private set
+    var browseQuery by mutableStateOf("")
+    var selectedSearchPluginIds by mutableStateOf<Set<String>>(emptySet())
+        private set
     var repositoryInput by mutableStateOf("")
     var repositoryCatalogs by mutableStateOf<List<RepositoryCatalogState>>(emptyList())
         private set
@@ -93,14 +111,30 @@ internal class LNReaderAppState(
     val updatesChecker get() = appDatabase.updatesChecker
 
     fun syncInstalledPlugins(installedPlugins: List<InstalledPluginRecord>) {
+        val installedIds = installedPlugins.map { it.pluginId }.toSet()
         when {
             installedPlugins.isEmpty() -> {
                 selectedPluginId = null
-                browseNovels = emptyList()
+                browseItems = emptyList()
+                selectedSearchPluginIds = emptySet()
+                browseContentMode = BrowseContentMode.Empty
             }
             selectedPluginId == null || installedPlugins.none { it.pluginId == selectedPluginId } -> {
                 selectedPluginId = installedPlugins.first().pluginId
-                browseNovels = emptyList()
+                if (browseContentMode == BrowseContentMode.Popular) {
+                    browseItems = emptyList()
+                    browseContentMode = BrowseContentMode.Empty
+                }
+            }
+        }
+        if (installedIds.isNotEmpty()) {
+            val currentSelection = selectedSearchPluginIds.intersect(installedIds)
+            selectedSearchPluginIds = if (currentSelection.isEmpty()) installedIds else currentSelection
+        }
+        if (browseItems.any { it.pluginId !in installedIds }) {
+            browseItems = browseItems.filter { it.pluginId in installedIds }
+            if (browseItems.isEmpty()) {
+                browseContentMode = BrowseContentMode.Empty
             }
         }
     }
@@ -120,7 +154,18 @@ internal class LNReaderAppState(
     fun selectInstalledPlugin(pluginId: String) {
         if (selectedPluginId != pluginId) {
             selectedPluginId = pluginId
-            browseNovels = emptyList()
+            if (browseContentMode == BrowseContentMode.Popular) {
+                browseItems = emptyList()
+                browseContentMode = BrowseContentMode.Empty
+            }
+        }
+    }
+
+    fun toggleSearchPlugin(pluginId: String) {
+        selectedSearchPluginIds = if (pluginId in selectedSearchPluginIds) {
+            selectedSearchPluginIds - pluginId
+        } else {
+            selectedSearchPluginIds + pluginId
         }
     }
 
@@ -159,25 +204,78 @@ internal class LNReaderAppState(
         if (selectedPluginId == pluginId) {
             val remaining = installedPluginRepository.snapshot()
             selectedPluginId = remaining.firstOrNull()?.pluginId
-            browseNovels = if (selectedPluginId == null) emptyList() else browseNovels
+            if (browseContentMode == BrowseContentMode.Popular) {
+                browseItems = emptyList()
+                browseContentMode = BrowseContentMode.Empty
+            }
+            selectedSearchPluginIds = selectedSearchPluginIds - pluginId
+            if (selectedSearchPluginIds.isEmpty() && remaining.isNotEmpty()) {
+                selectedSearchPluginIds = remaining.map { it.pluginId }.toSet()
+            }
+        } else {
+            browseItems = browseItems.filterNot { it.pluginId == pluginId }
+            if (browseItems.isEmpty()) {
+                browseContentMode = BrowseContentMode.Empty
+            }
+            selectedSearchPluginIds = selectedSearchPluginIds - pluginId
         }
     }
 
     fun loadPopularNovels() = launchTask("Loading popular novels") {
         val plugin = requireSelectedPlugin()
         ensurePluginLoaded(plugin)
-        browseNovels = service.popularNovels(1)
+        browseItems = service.popularNovels(1).map {
+            BrowseNovelRecord(
+                pluginId = plugin.pluginId,
+                pluginName = plugin.name,
+                novel = it,
+            )
+        }
+        browseContentMode = BrowseContentMode.Popular
+        errorMessage = null
         backStack = listOf(AppScreen.Root(AppTab.Browse))
     }
 
-    fun openBrowseNovel(novel: NovelSummary) = launchTask("Loading novel") {
-        val pluginId = selectedPluginId ?: error("Install a plugin from Extensions first.")
+    fun searchInstalledSources() = launchTask("Searching installed sources") {
+        val query = browseQuery.trim()
+        require(query.isNotBlank()) { "Enter a search term." }
+        val targets = installedPluginRepository.snapshot().filter { it.pluginId in selectedSearchPluginIds }
+        require(targets.isNotEmpty()) { "Select at least one installed extension to search." }
+        val results = mutableListOf<BrowseNovelRecord>()
+        val failures = mutableListOf<String>()
+        for (plugin in targets) {
+            runCatching {
+                ensurePluginLoaded(plugin)
+                service.searchNovels(query, page = 1)
+            }.onSuccess { novels ->
+                results += novels.map {
+                    BrowseNovelRecord(
+                        pluginId = plugin.pluginId,
+                        pluginName = plugin.name,
+                        novel = it,
+                    )
+                }
+            }.onFailure { error ->
+                failures += "${plugin.name}: ${error.message ?: error::class.simpleName ?: "unknown error"}"
+            }
+        }
+        browseItems = results.sortedWith(compareBy({ it.novel.name.lowercase() }, { it.pluginName.lowercase() }))
+        browseContentMode = BrowseContentMode.Search
+        if (failures.isEmpty()) {
+            errorMessage = null
+        } else {
+            errorMessage = "Some sources failed during search: ${failures.joinToString(" | ")}"
+        }
+        backStack = listOf(AppScreen.Root(AppTab.Browse))
+    }
+
+    fun openBrowseNovel(item: BrowseNovelRecord) = launchTask("Loading novel") {
         openNovelDetail(
             tab = AppTab.Browse,
-            pluginId = pluginId,
-            novelPath = novel.path,
-            fallbackTitle = novel.name,
-            fallbackCover = novel.cover,
+            pluginId = item.pluginId,
+            novelPath = item.novel.path,
+            fallbackTitle = item.novel.name,
+            fallbackCover = item.novel.cover,
         )
     }
 
