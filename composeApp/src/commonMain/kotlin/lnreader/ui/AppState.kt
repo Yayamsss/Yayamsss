@@ -287,15 +287,13 @@ internal class LNReaderAppState(
         backStack = listOf(AppScreen.Root(AppTab.Browse))
     }
 
-    fun openBrowseNovel(item: BrowseNovelRecord) = launchTask("Loading novel") {
-        openNovelDetail(
-            tab = AppTab.Browse,
-            pluginId = item.pluginId,
-            novelPath = item.novel.path,
-            fallbackTitle = item.novel.name,
-            fallbackCover = item.novel.cover,
-        )
-    }
+    fun openBrowseNovel(item: BrowseNovelRecord) = openNovelDetail(
+        tab = AppTab.Browse,
+        pluginId = item.pluginId,
+        novelPath = item.novel.path,
+        fallbackTitle = item.novel.name,
+        fallbackCover = item.novel.cover,
+    )
 
     fun openLibraryNovel(novel: LibraryNovelRecord) = openNovelDetail(
         tab = AppTab.Library,
