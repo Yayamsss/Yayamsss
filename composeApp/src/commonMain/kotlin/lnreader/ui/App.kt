@@ -43,6 +43,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -186,18 +187,17 @@ private fun LNReaderAppContent(appState: LNReaderAppState) {
                     )
                     AppTab.History -> HistoryRoot(history = history, onOpenHistory = appState::openHistoryChapter)
                     AppTab.Browse -> BrowseRoot(
+                        browseShowingPicker = appState.browseShowingPicker,
                         selectedPluginId = appState.selectedPluginId,
-                        selectedSearchPluginIds = appState.selectedSearchPluginIds,
                         installedPlugins = installedPlugins,
                         browseQuery = appState.browseQuery,
                         browseMode = appState.browseContentMode,
                         novels = appState.browseItems,
                         isBusy = appState.isBusy,
-                        onSelectPlugin = appState::selectInstalledPlugin,
-                        onToggleSearchPlugin = appState::toggleSearchPlugin,
+                        onOpenSource = appState::openSource,
+                        onCloseSource = appState::closeSource,
                         onBrowseQueryChange = { appState.browseQuery = it },
                         onSearch = appState::searchInstalledSources,
-                        onLoadPopular = appState::loadPopularNovels,
                         onSelectNovel = appState::openBrowseNovel,
                     )
                     AppTab.Extensions -> ExtensionsRoot(
@@ -253,21 +253,19 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
         }
     }
 }
-
 @Composable
 private fun BrowseRoot(
+    browseShowingPicker: Boolean,
     selectedPluginId: String?,
-    selectedSearchPluginIds: Set<String>,
     installedPlugins: List<InstalledPluginRecord>,
     browseQuery: String,
     browseMode: BrowseContentMode,
     novels: List<BrowseNovelRecord>,
     isBusy: Boolean,
-    onSelectPlugin: (String) -> Unit,
-    onToggleSearchPlugin: (String) -> Unit,
+    onOpenSource: (String) -> Unit,
+    onCloseSource: () -> Unit,
     onBrowseQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
-    onLoadPopular: () -> Unit,
     onSelectNovel: (BrowseNovelRecord) -> Unit,
 ) {
     if (installedPlugins.isEmpty()) {
@@ -278,95 +276,87 @@ private fun BrowseRoot(
         return
     }
 
+    if (browseShowingPicker) {
+        SourcePickerGrid(installedPlugins = installedPlugins, onOpenSource = onOpenSource)
+        return
+    }
+
     val selectedPlugin = installedPlugins.firstOrNull { it.pluginId == selectedPluginId } ?: installedPlugins.first()
     Column(Modifier.fillMaxSize()) {
-        Text("Popular source", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(installedPlugins, key = { it.pluginId }) { plugin ->
-                FilterChip(
-                    selected = plugin.pluginId == selectedPlugin.pluginId,
-                    onClick = { onSelectPlugin(plugin.pluginId) },
-                    label = { Text(plugin.name) },
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onCloseSource) {
+                Text("Back")
             }
+            Spacer(Modifier.width(4.dp))
+            Text(selectedPlugin.name, style = MaterialTheme.typography.titleLarge)
         }
-        Spacer(Modifier.height(12.dp))
-        Text("Global search", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = browseQuery,
             onValueChange = onBrowseQueryChange,
-            label = { Text("Title or keyword") },
+            label = { Text("Search ${selectedPlugin.name}") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
+            trailingIcon = {
+                IconButton(onClick = onSearch, enabled = !isBusy && browseQuery.isNotBlank()) {
+                    Icon(Icons.Filled.Search, contentDescription = "Search")
+                }
+            },
         )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Search sources",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary,
-        )
-        Spacer(Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(installedPlugins, key = { "search-${it.pluginId}" }) { plugin ->
-                FilterChip(
-                    selected = plugin.pluginId in selectedSearchPluginIds,
-                    onClick = { onToggleSearchPlugin(plugin.pluginId) },
-                    label = { Text(plugin.name) },
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(selectedPlugin.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "${selectedPlugin.site} • ${selectedPlugin.lang.uppercase()} • v${selectedPlugin.version}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-                Text(
-                    selectedPlugin.pluginId,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = onSearch,
-                enabled = !isBusy && browseQuery.isNotBlank() && selectedSearchPluginIds.isNotEmpty(),
-            ) {
-                Text("Search")
-            }
-            Button(onClick = onLoadPopular, enabled = !isBusy) {
-                Text("Load popular")
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider()
         Spacer(Modifier.height(12.dp))
         if (novels.isEmpty()) {
             EmptyState(
                 title = when (browseMode) {
-                    BrowseContentMode.Empty -> "Browse installed sources"
+                    BrowseContentMode.Empty -> "Loading…"
                     BrowseContentMode.Popular -> "No popular novels found"
                     BrowseContentMode.Search -> "No search results"
                 },
                 message = when (browseMode) {
-                    BrowseContentMode.Empty -> "Choose an installed extension, then load its popular feed or search across your installed sources."
+                    BrowseContentMode.Empty -> "Fetching ${selectedPlugin.name}'s popular feed."
                     BrowseContentMode.Popular -> "This extension returned no popular novels."
-                    BrowseContentMode.Search -> "Try another search term or enable more installed sources."
+                    BrowseContentMode.Search -> "Try another search term."
                 },
             )
         } else {
             BrowseNovelGrid(
                 novels = novels,
-                showSource = browseMode == BrowseContentMode.Search || novels.map { it.pluginId }.distinct().size > 1,
+                showSource = false,
                 onSelectNovel = onSelectNovel,
             )
+        }
+    }
+}
+
+@Composable
+private fun SourcePickerGrid(
+    installedPlugins: List<InstalledPluginRecord>,
+    onOpenSource: (String) -> Unit,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 92.dp),
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        items(installedPlugins, key = { it.pluginId }) { plugin ->
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth().clickable { onOpenSource(plugin.pluginId) },
+            ) {
+                CoverImage(
+                    url = plugin.iconUrl,
+                    title = plugin.name,
+                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    plugin.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

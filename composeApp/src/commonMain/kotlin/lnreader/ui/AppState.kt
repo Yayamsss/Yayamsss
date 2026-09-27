@@ -85,6 +85,8 @@ internal class LNReaderAppState(
         private set
     var selectedPluginId by mutableStateOf<String?>(null)
         private set
+    var browseShowingPicker by mutableStateOf(true)
+        private set
     var browseItems by mutableStateOf<List<BrowseNovelRecord>>(emptyList())
         private set
     var browseContentMode by mutableStateOf(BrowseContentMode.Empty)
@@ -118,6 +120,7 @@ internal class LNReaderAppState(
                 browseItems = emptyList()
                 selectedSearchPluginIds = emptySet()
                 browseContentMode = BrowseContentMode.Empty
+                browseShowingPicker = true
             }
             selectedPluginId == null || installedPlugins.none { it.pluginId == selectedPluginId } -> {
                 selectedPluginId = installedPlugins.first().pluginId
@@ -159,6 +162,21 @@ internal class LNReaderAppState(
                 browseContentMode = BrowseContentMode.Empty
             }
         }
+    }
+    
+    fun openSource(pluginId: String) {
+        selectedPluginId = pluginId
+        selectedSearchPluginIds = setOf(pluginId)
+        browseShowingPicker = false
+        browseQuery = ""
+        loadPopularNovels()
+    }
+
+    fun closeSource() {
+        browseShowingPicker = true
+        browseItems = emptyList()
+        browseContentMode = BrowseContentMode.Empty
+        browseQuery = ""
     }
 
     fun toggleSearchPlugin(pluginId: String) {
